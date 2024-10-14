@@ -38,13 +38,13 @@ func NewFromIdentifier(identifier string) *ContainerImage {
 		// remove default registry for backwards-compatibility
 		if img.RegistryURL == "docker.io" && !strings.HasPrefix(imgRef, "docker.io") {
 			img.RegistryURL = ""
+			// if library/ was added to the image name, remove it
+			if !strings.HasPrefix(imgRef, "library/") {
+				img.ImageName = strings.TrimPrefix(img.ImageName, "library/")
+			}
 		}
 		img.ImageAlias = alias
 		img.ImageName = reference.Path(parsed)
-		// if library/ was added to the image name, remove it
-		if !strings.HasPrefix(imgRef, "library/") {
-			img.ImageName = strings.TrimPrefix(img.ImageName, "library/")
-		}
 		if digested, ok := parsed.(reference.Digested); ok {
 			img.ImageTag = &tag.ImageTag{
 				TagDigest: string(digested.Digest()),

@@ -2,6 +2,7 @@ package argocd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -482,6 +483,99 @@ func marshalParamsOverride(app *v1alpha1.Application, originalData []byte) ([]by
 			}
 
 			override, err = yaml.Marshal(helmNewValues)
+		} else if strings.HasPrefix(app.Annotations[common.WriteBackTargetAnnotation], common.HelmObjectPrefix) {
+			images := GetImagesAndAliasesFromApplication(app)
+
+			appOriginal := yaml.MapSlice{}
+			err = yaml.Unmarshal(originalData, &appOriginal)
+			if err != nil {
+				return nil, err
+			}
+			var specKey int
+			var sourceKey int
+			var helmKey int
+			var valuesKey int
+			specObject := yaml.MapSlice{}
+			sourceObject := yaml.MapSlice{}
+			helmObject := yaml.MapSlice{}
+			valuesObject := yaml.MapSlice{}
+		found:
+			for i, item := range appOriginal {
+				if item.Key == "spec" {
+					specKey = i
+					sp := item.Value
+					specObject = sp.(yaml.MapSlice)
+					//spec = item.Value(yaml.MapSlice{})
+					for j, specParam := range specObject {
+						if specParam.Key == "source" {
+							sourceKey = j
+							src := specParam.Value
+							sourceObject = src.(yaml.MapSlice)
+							for k, sourceParam := range sourceObject {
+								if sourceParam.Key == "helm" {
+									h := sourceParam.Value
+									helmKey = k
+									helmObject = h.(yaml.MapSlice)
+									for l, helmParam := range helmObject {
+										if helmParam.Key == "valuesObject" {
+											v := helmParam.Value
+											valuesKey = l
+											valuesObject = v.(yaml.MapSlice)
+											break found
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			if len(valuesObject) == 0 {
+				return nil, errors.New("failed to find valuesObject in app definition")
+			}
+			for _, c := range images {
+				if c.ImageAlias == "" {
+					continue
+				}
+				helmAnnotationParamName, helmAnnotationParamVersion := getHelmParamNamesFromAnnotation(app.Annotations, c)
+
+				if helmAnnotationParamName == "" {
+					return nil, fmt.Errorf("could not find an image-name annotation for image %s", c.ImageName)
+				}
+				// for image-spec annotation, helmAnnotationParamName holds image-spec annotation value,
+				// and helmAnnotationParamVersion is empty
+				if helmAnnotationParamVersion == "" {
+					if c.GetParameterHelmImageSpec(app.Annotations) == "" {
+						// not a full image-spec, so image-tag is required
+						return nil, fmt.Errorf("could not find an image-tag annotation for image %s", c.ImageName)
+					}
+				} else {
+					// image-tag annotation is present, so continue to process image-tag
+					helmParamVersion := getHelmParam(appSource.Helm.Parameters, helmAnnotationParamVersion)
+					if helmParamVersion == nil {
+						return nil, fmt.Errorf("%s parameter not found", helmAnnotationParamVersion)
+					}
+					err = setHelmValue(&valuesObject, helmAnnotationParamVersion, helmParamVersion.Value)
+					if err != nil {
+						return nil, fmt.Errorf("failed to set image parameter version value: %v", err)
+					}
+				}
+
+				helmParamName := getHelmParam(appSource.Helm.Parameters, helmAnnotationParamName)
+				if helmParamName == nil {
+					return nil, fmt.Errorf("%s parameter not found", helmAnnotationParamName)
+				}
+
+				err = setHelmValue(&valuesObject, helmAnnotationParamName, helmParamName.Value)
+				if err != nil {
+					return nil, fmt.Errorf("failed to set image parameter name value: %v", err)
+				}
+			}
+			helmObject[valuesKey].Value = valuesObject
+			sourceObject[helmKey].Value = helmObject
+			specObject[sourceKey].Value = sourceObject
+			appOriginal[specKey].Value = specObject
+			override, err = yaml.Marshal(appOriginal)
 		} else {
 			var params helmOverride
 			newParams := helmOverride{
@@ -630,6 +724,8 @@ func getWriteBackConfig(app *v1alpha1.Application, kubeClient *kube.KubernetesCl
 			wbc.KustomizeBase = parseKustomizeBase(target, getApplicationSource(app).Path)
 		} else if ok && strings.HasPrefix(target, common.HelmPrefix) { // This keeps backward compatibility
 			wbc.Target = parseTarget(target, getApplicationSource(app).Path)
+		} else if ok && strings.HasPrefix(target, common.HelmObjectPrefix) { // This keeps backward compatibility
+			wbc.Target = parseAppHelmObjectTarget(target, getApplicationSource(app).Path)
 		} else if ok { // This keeps backward compatibility
 			wbc.Target = app.Annotations[common.WriteBackTargetAnnotation]
 		}
@@ -657,6 +753,17 @@ func parseKustomizeBase(target string, sourcePath string) (kustomizeBase string)
 	if target == common.KustomizationPrefix {
 		return filepath.Join(sourcePath, ".")
 	} else if base := target[len(common.KustomizationPrefix)+1:]; strings.HasPrefix(base, "/") {
+		return base[1:]
+	} else {
+		return filepath.Join(sourcePath, base)
+	}
+}
+
+// parseTarget extracts the target path to set in the writeBackConfig configuration
+func parseAppHelmObjectTarget(writeBackTarget string, sourcePath string) string {
+	if writeBackTarget == common.HelmPrefix {
+		return filepath.Join(sourcePath, "./", common.DefaultHelmValuesFilename)
+	} else if base := writeBackTarget[len(common.HelmPrefix)+1:]; strings.HasPrefix(base, "/") {
 		return base[1:]
 	} else {
 		return filepath.Join(sourcePath, base)
