@@ -4,6 +4,4 @@ kind: Kustomization
 resources:
   - argocd-image-updater-clusterrole.yaml
   - argocd-image-updater-clusterrolebinding.yaml
-  - argocd-image-updater-role.yaml
-  - argocd-image-updater-rolebinding.yaml
   - argocd-image-updater-sa.yaml
