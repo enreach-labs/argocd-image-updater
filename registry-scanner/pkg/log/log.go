@@ -40,23 +40,20 @@ func NewContext() *LogContext {
 
 // SetLogLevel sets the log level to use for the logger
 func SetLogLevel(logLevel string) error {
-	var level logrus.Level
 	switch strings.ToLower(logLevel) {
 	case "trace":
-		level = logrus.TraceLevel
+		logger.SetLevel(logrus.TraceLevel)
 	case "debug":
-		level = logrus.DebugLevel
+		logger.SetLevel(logrus.DebugLevel)
 	case "info":
-		level = logrus.InfoLevel
+		logger.SetLevel(logrus.InfoLevel)
 	case "warn":
-		level = logrus.WarnLevel
+		logger.SetLevel(logrus.WarnLevel)
 	case "error":
-		level = logrus.ErrorLevel
+		logger.SetLevel(logrus.ErrorLevel)
 	default:
 		return fmt.Errorf("invalid loglevel: %s", logLevel)
 	}
-	logger.SetLevel(level)
-	logrus.SetLevel(level) // set loglevel for the default logrus.logger
 	return nil
 }
 
